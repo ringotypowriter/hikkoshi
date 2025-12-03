@@ -100,19 +100,9 @@ fn cmdList(allocator: std.mem.Allocator, override_config_path: ?[]const u8) !voi
     };
     defer allocator.free(config_path);
 
-    var cfg = hikko.loadConfig(allocator, config_path) catch |err| {
-        if (err == error.FileNotFound) {
-            try stderr.print(
-                "hikkoshi: config file not found at '{s}'\n",
-                .{config_path},
-            );
-            try stderr.writeAll(
-                "hint: create one with `hikkoshi example > ~/.config/hikkoshi/config.toml`\n",
-            );
-            return;
-        }
-        return err;
-    };
+    var cfg: hikko.Config = undefined;
+    const have_cfg = try loadConfigOrPromptCreateFor(allocator, config_path, stderr, &cfg);
+    if (!have_cfg) return;
     defer cfg.deinit();
 
     const names = try hikko.collectProfileNames(&cfg, allocator);
@@ -157,19 +147,9 @@ fn cmdShow(
     };
     defer allocator.free(config_path);
 
-    var cfg = hikko.loadConfig(allocator, config_path) catch |err| {
-        if (err == error.FileNotFound) {
-            try stderr.print(
-                "hikkoshi: config file not found at '{s}'\n",
-                .{config_path},
-            );
-            try stderr.writeAll(
-                "hint: create one with `hikkoshi example > ~/.config/hikkoshi/config.toml`\n",
-            );
-            return;
-        }
-        return err;
-    };
+    var cfg: hikko.Config = undefined;
+    const have_cfg = try loadConfigOrPromptCreateFor(allocator, config_path, stderr, &cfg);
+    if (!have_cfg) return;
     defer cfg.deinit();
 
     const profile = hikko.findProfile(&cfg, profile_name) orelse {
@@ -251,6 +231,99 @@ fn cmdExample() !void {
     try hikko.printExampleConfig(stdout);
 }
 
+fn loadConfigOrPromptCreateFor(
+    allocator: std.mem.Allocator,
+    config_path: []const u8,
+    stderr: anytype,
+    cfg: *hikko.Config,
+) !bool {
+    load: while (true) {
+        cfg.* = hikko.loadConfig(allocator, config_path) catch |err| {
+            if (err == error.FileNotFound) {
+                const created = try maybeCreateExampleConfigAtPath(config_path, stderr);
+                if (!created) {
+                    return false;
+                }
+                continue :load;
+            }
+            return err;
+        };
+
+        return true;
+    }
+}
+
+fn maybeCreateExampleConfigAtPath(config_path: []const u8, stderr: anytype) !bool {
+    try stderr.print(
+        "hikkoshi: config file not found at '{s}'\n",
+        .{config_path},
+    );
+    try stderr.writeAll(
+        "hint: create one with `hikkoshi example > ~/.config/hikkoshi/config.toml`\n",
+    );
+
+    const stdin_file = std.fs.File.stdin();
+    if (!stdin_file.isTty()) {
+        return false;
+    }
+
+    try stderr.writeAll("create an example config at this path now? [y/N] ");
+    try stderr.flush();
+
+    var stdin_buffer: [1024]u8 = undefined;
+    var stdin_reader = stdin_file.reader(&stdin_buffer);
+    const stdin = &stdin_reader.interface;
+
+    var answer_buf: [1]u8 = undefined;
+    const count = stdin.readSliceShort(&answer_buf) catch |err| {
+        if (err == error.EndOfStream) {
+            return false;
+        }
+        return err;
+    };
+    if (count == 0) {
+        return false;
+    }
+
+    const ch = answer_buf[0];
+    if (ch != 'y' and ch != 'Y') {
+        try stderr.writeAll("hikkoshi: not creating config file\n");
+        return false;
+    }
+
+    const dir_path = std.fs.path.dirname(config_path) orelse ".";
+    std.fs.cwd().makePath(dir_path) catch |err| {
+        try stderr.print(
+            "hikkoshi: failed to create config directory '{s}': {s}\n",
+            .{ dir_path, @errorName(err) },
+        );
+        return false;
+    };
+
+    var file = std.fs.cwd().createFile(config_path, .{}) catch |err| {
+        try stderr.print(
+            "hikkoshi: failed to create config file '{s}': {s}\n",
+            .{ config_path, @errorName(err) },
+        );
+        return false;
+    };
+    defer file.close();
+
+    var file_buffer: [1024]u8 = undefined;
+    var file_writer = file.writer(&file_buffer);
+    const out = &file_writer.interface;
+    defer out.flush() catch {};
+
+    try hikko.printExampleConfig(out);
+
+    try stderr.print(
+        "hikkoshi: wrote example config to '{s}'\n",
+        .{config_path},
+    );
+
+    return true;
+}
+
 fn cmdRunProfile(
     allocator: std.mem.Allocator,
     override_config_path: ?[]const u8,
@@ -280,19 +353,9 @@ fn cmdRunProfile(
     };
     defer allocator.free(config_path);
 
-    var cfg = hikko.loadConfig(allocator, config_path) catch |err| {
-        if (err == error.FileNotFound) {
-            try stderr.print(
-                "hikkoshi: config file not found at '{s}'\n",
-                .{config_path},
-            );
-            try stderr.writeAll(
-                "hint: create one with `hikkoshi example > ~/.config/hikkoshi/config.toml`\n",
-            );
-            return;
-        }
-        return err;
-    };
+    var cfg: hikko.Config = undefined;
+    const have_cfg = try loadConfigOrPromptCreateFor(allocator, config_path, stderr, &cfg);
+    if (!have_cfg) return;
     defer cfg.deinit();
 
     const profile = hikko.findProfile(&cfg, profile_name) orelse {
@@ -308,7 +371,30 @@ fn cmdRunProfile(
     child.stderr_behavior = .Inherit;
     child.env_map = &env_map;
 
-    const term = try child.spawnAndWait();
+    const term = child.spawnAndWait() catch |err| {
+        const cmd = child_argv[0];
+        switch (err) {
+            error.FileNotFound => {
+                try stderr.print(
+                    "hikkoshi: failed to spawn '{s}': command not found\n",
+                    .{cmd},
+                );
+            },
+            error.AccessDenied => {
+                try stderr.print(
+                    "hikkoshi: failed to spawn '{s}': access denied\n",
+                    .{cmd},
+                );
+            },
+            else => {
+                try stderr.print(
+                    "hikkoshi: failed to spawn '{s}': {s}\n",
+                    .{ cmd, @errorName(err) },
+                );
+            },
+        }
+        return;
+    };
     switch (term) {
         .Exited => |code| {
             std.process.exit(@intCast(code));

@@ -66,3 +66,24 @@ This repository contains `hikkoshi`, a Zig CLI tool for running commands under p
     }.lessThan);
     ```
   - Make sure the slice you pass to `block` is mutable (`[][]const u8` is fine; `[]const []const u8` is not).
+
+- **Interactive stdin (yes/no prompts)**  
+  - `Io.Reader` in 0.15.2 does not provide `readByte`; prefer `readSliceShort` with a 1‑byte buffer for simple `y/n` style prompts.  
+  - Recommended pattern:
+    ```zig
+    const stdin_file = std.fs.File.stdin();
+    var stdin_buf: [1024]u8 = undefined;
+    var stdin_reader = stdin_file.reader(&stdin_buf);
+    const stdin = &stdin_reader.interface;
+
+    var answer_buf: [1]u8 = undefined;
+    const count = stdin.readSliceShort(&answer_buf) catch |err| {
+        if (err == error.EndOfStream) return false;
+        return err;
+    };
+    if (count == 0) return false;
+
+    const ch = answer_buf[0];
+    const yes = (ch == 'y' or ch == 'Y');
+    ```
+  - 对交互式 CLI 提示（如“是否创建配置文件？[y/N]”），建议先检测 `stdin_file.isTty()`，避免在管道或脚本环境中阻塞等待输入。
