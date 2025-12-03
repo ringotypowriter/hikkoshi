@@ -45,7 +45,7 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 ln -sf "$(pwd)/zig-out/bin/hks" "$HOME/.local/bin/hks"
 ```
 
-After opening a new terminal, you can run `hks` from anywhere. Rebuilding with `zig build` will update the target binary, and the `hks` symlink will keep pointing at the latest build.
+After opening a new terminal, you can run `hks` from anywhere.
 
 ---
 
