@@ -34,9 +34,18 @@ zig build
 
 The resulting binary will be available as:
 
-- `zig-out/bin/hikkoshi` – main binary (also installs the `hks` CLI entrypoint, depending on your build setup)
+- `zig-out/bin/hks` – main binary 
 
-You can add `zig-out/bin` to your `PATH`, or install/symlink the binary somewhere on your system.
+The recommended way to use it as a stable CLI is to create a symlink from a directory on your `PATH` to the built binary, for example on macOS (run this inside the cloned repo):
+
+```bash
+mkdir -p ~/.local/bin
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+
+ln -sf "$(pwd)/zig-out/bin/hks" "$HOME/.local/bin/hks"
+```
+
+After opening a new terminal, you can run `hks` from anywhere. Rebuilding with `zig build` will update the target binary, and the `hks` symlink will keep pointing at the latest build.
 
 ---
 
