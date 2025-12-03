@@ -340,6 +340,11 @@ fn cmdRunProfile(
         return;
     }
 
+    if (std.mem.eql(u8, child_argv[0], "--sh") and child_argv.len < 2) {
+        try stderr.writeAll("hikkoshi: --sh requires a command string\n");
+        return;
+    }
+
     const config_path = hikko.resolveConfigPath(allocator, override_config_path) catch |err| {
         switch (err) {
             error.HomeNotSet => {
@@ -365,14 +370,26 @@ fn cmdRunProfile(
 
     var env_map = try hikko.buildEnvMapForProfile(allocator, profile);
 
-    var child = std.process.Child.init(child_argv, allocator);
+    const use_shell = std.mem.eql(u8, child_argv[0], "--sh");
+    var shell_argv_storage: [3][]const u8 = undefined;
+    const argv_for_child = blk: {
+        if (!use_shell) break :blk child_argv;
+
+        const shell_path = env_map.get("SHELL") orelse "/bin/sh";
+        shell_argv_storage[0] = shell_path;
+        shell_argv_storage[1] = "-lc";
+        shell_argv_storage[2] = child_argv[1];
+        break :blk shell_argv_storage[0..3];
+    };
+
+    var child = std.process.Child.init(argv_for_child, allocator);
     child.stdin_behavior = .Inherit;
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
     child.env_map = &env_map;
 
     const term = child.spawnAndWait() catch |err| {
-        const cmd = child_argv[0];
+        const cmd = argv_for_child[0];
         switch (err) {
             error.FileNotFound => {
                 try stderr.print(

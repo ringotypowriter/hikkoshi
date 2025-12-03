@@ -80,6 +80,7 @@
 
 ```bash
 hikkoshi <profile> <command> [args...]
+ hikkoshi <profile> --sh '<shell-command>'
 ```
 
 例如：
@@ -95,6 +96,7 @@ hikkoshi test python script.py
 - 根据 `<profile>` 从配置文件中找到对应配置；
 - 构造虚拟 `HOME` + 一组 XDG 环境变量 + 额外 env；
 - 在该环境下执行 `<command> [args...]`；
+- 若使用 `--sh` 形式，则在该 profile 环境下调用用户的 shell（优先使用 `SHELL` 环境变量，否则回退到 `/bin/sh`），以 `-lc '<shell-command>'` 的方式执行一整条命令行；
 - `hikkoshi` 自己的退出码 = 子进程的退出码。
 
 ### 3.2 管理 / 查询子命令
@@ -282,4 +284,3 @@ EDITOR  = "nvim"
   - 在配置中对 PATH 做追加/前置，而不是完全覆盖。
 
 目前版本的目标是：**先把「基于 HOME 的 XDG 环境 + 子进程运行」打通，并保持实现简单清晰。**
-
