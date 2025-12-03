@@ -2,3 +2,4 @@
 .DS_Store
 zig-out/
 dist
+dev_docs/
