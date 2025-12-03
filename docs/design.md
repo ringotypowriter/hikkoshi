@@ -79,16 +79,16 @@
 不提供默认 profile，必须显式指定：
 
 ```bash
-hikkoshi <profile> <command> [args...]
- hikkoshi <profile> --sh '<shell-command>'
+hks <profile> <command> [args...]
+hks <profile> --sh '<shell-command>'
 ```
 
 例如：
 
 ```bash
-hikkoshi work nvim
-hikkoshi dev node app.mjs
-hikkoshi test python script.py
+hks work nvim
+hks dev node app.mjs
+hks test python script.py
 ```
 
 语义：
@@ -101,20 +101,23 @@ hikkoshi test python script.py
 
 ### 3.2 管理 / 查询子命令
 
-暂定以下子命令（均不启动子进程）：
+暂定以下子命令（均不启动子进程，实际调用的 binary 名为 `hks`）：
 
-- `hikkoshi list`
+- `hks list`
   - 列出所有可用 profile 名称；
-- `hikkoshi show <profile>`
+- `hks add <home> [name]`
+  - 从给定的 `home` 路径中自动推导 profile 名称（使用路径最后一段作为名称），也可以显式指定 `name` 作为 profile 名称；
+  - 将一个只包含 `home` 字段的新 profile 追加到配置文件中，若同名 profile 已存在，则报错并不修改配置文件；
+- `hks show <profile>`
   - 展示指定 profile 的解析结果（已展开的绝对路径和 env 列表）；
-- `hikkoshi config-path`
+- `hks config-path`
   - 打印当前生效的配置文件路径；
-- `hikkoshi example`
+- `hks example`
   - 输出一份示例配置（TOML），方便用户重定向到文件。
 
 后续可以考虑（非 v0.1 必选）：
 
-- `hikkoshi doctor`
+- `hks doctor`
   - 检查配置文件是否存在、是否能解析、目录是否存在等。
 
 ### 3.3 配置文件位置与优先级
@@ -127,7 +130,7 @@ hikkoshi test python script.py
 
 - 环境变量：`HIKKOSHI_CONFIG=/path/to/config.toml`
 - 命令行参数（可选特性，v0.1 可讨论实现与否）：
-  - `hikkoshi --config /path/to/config.toml ...`
+  - `hks --config /path/to/config.toml ...`
 
 查找优先级（从高到低）：
 
@@ -138,8 +141,8 @@ hikkoshi test python script.py
 配置文件缺失时：
 
 - 对运行命令（`<profile> <command>` / `list` / `show` 等）：
-  - 报错并提示如何用 `hikkoshi example > ~/.config/hikkoshi/config.toml` 初始化；
-- 对 `hikkoshi example`：
+  - 报错并提示如何用 `hks example > ~/.config/hikkoshi/config.toml` 初始化；
+- 对 `hks example`：
   - 永远可用，不依赖现有配置文件。
 
 ---
@@ -207,7 +210,7 @@ EDITOR  = "nvim"
 - `src/main.zig`
   - 程序入口；
   - 解析命令行参数；
-  - 决定当前模式：运行子进程 / list / show / config-path / example；
+  - 决定当前模式：运行子进程 / list / add / show / config-path / example；
   - 调用其他模块实现具体逻辑。
 
 - `src/config.zig`
@@ -247,14 +250,14 @@ EDITOR  = "nvim"
 
 - 配置文件不存在：
   - 提示实际查找路径；
-  - 引导使用 `hikkoshi example > ~/.config/hikkoshi/config.toml`；
+  - 引导使用 `hks example > ~/.config/hikkoshi/config.toml`；
 - TOML 解析失败：
   - 显示解析错误信息（来源于 zig-toml）；
   - 标注配置文件路径；
 - profile 不存在：
   - 显示错误信息；
   - 列出现有 profile 名称；
-  - 建议用 `hikkoshi list` 查看；
+  - 建议用 `hks list` 查看；
 - 参数不完整：
   - 没有 `<profile>` 或 `<command>`；
   - 打印简明 usage。

@@ -45,6 +45,15 @@ fn run(allocator: std.mem.Allocator, args: []const []const u8) !void {
     if (std.mem.eql(u8, cmd, "list")) {
         try cmdList(allocator, override_config_path);
         return;
+    } else if (std.mem.eql(u8, cmd, "add")) {
+        if (idx + 1 >= args.len) {
+            try stderr.writeAll("hikkoshi: add requires a home directory path\n");
+            return;
+        }
+        const home_arg = args[idx + 1];
+        const name_arg: ?[]const u8 = if (idx + 2 < args.len) args[idx + 2] else null;
+        try cmdAddProfile(allocator, override_config_path, home_arg, name_arg);
+        return;
     } else if (std.mem.eql(u8, cmd, "show")) {
         if (idx + 1 >= args.len) {
             try stderr.writeAll("hikkoshi: show requires a profile name\n");
@@ -193,6 +202,138 @@ fn cmdShow(
             try stdout.print("    {s}={s}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
         }
     }
+}
+
+fn deriveProfileNameFromHome(home_arg: []const u8) []const u8 {
+    // Strip trailing slashes (but keep at least one character).
+    var end = home_arg.len;
+    while (end > 0 and home_arg[end - 1] == '/') {
+        end -= 1;
+    }
+    if (end == 0) {
+        return "";
+    }
+
+    var start: usize = 0;
+    var i: usize = end;
+    while (i > 0) {
+        const ch = home_arg[i - 1];
+        if (ch == '/') {
+            start = i;
+            break;
+        }
+        i -= 1;
+    }
+
+    return home_arg[start..end];
+}
+
+fn writeTomlSingleQuotedString(writer: anytype, value: []const u8) !void {
+    try writer.writeAll("'");
+    var i: usize = 0;
+    while (i < value.len) : (i += 1) {
+        const ch = value[i];
+        if (ch == '\'') {
+            try writer.writeAll("''");
+        } else {
+            try writer.writeAll(&[_]u8{ch});
+        }
+    }
+    try writer.writeAll("'");
+}
+
+fn cmdAddProfile(
+    allocator: std.mem.Allocator,
+    override_config_path: ?[]const u8,
+    home_arg: []const u8,
+    name_arg: ?[]const u8,
+) !void {
+    var stdout_buffer: [1024]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    const stdout = &stdout_writer.interface;
+    defer stdout.flush() catch {};
+
+    var stderr_buffer: [1024]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    const stderr = &stderr_writer.interface;
+    defer stderr.flush() catch {};
+
+    if (home_arg.len == 0) {
+        try stderr.writeAll("hikkoshi: add requires a non-empty home directory path\n");
+        return;
+    }
+
+    const config_path = hikko.resolveConfigPath(allocator, override_config_path) catch |err| {
+        switch (err) {
+            error.HomeNotSet => {
+                try stderr.writeAll(
+                    "hikkoshi: HOME is not set and no config path is specified\n",
+                );
+                return;
+            },
+            else => return err,
+        }
+    };
+    defer allocator.free(config_path);
+
+    var cfg: hikko.Config = undefined;
+    const have_cfg = try loadConfigOrPromptCreateFor(allocator, config_path, stderr, &cfg);
+    if (!have_cfg) return;
+    defer cfg.deinit();
+
+    const profile_name = name_arg orelse deriveProfileNameFromHome(home_arg);
+    if (profile_name.len == 0) {
+        try stderr.writeAll(
+            "hikkoshi: failed to derive profile name from home path\n",
+        );
+        return;
+    }
+
+    if (hikko.findProfile(&cfg, profile_name) != null) {
+        try stderr.print("hikkoshi: profile '{s}' already exists\n", .{profile_name});
+        return;
+    }
+
+    const existing = std.fs.cwd().readFileAlloc(allocator, config_path, std.math.maxInt(usize)) catch |err| {
+        try stderr.print(
+            "hikkoshi: failed to read config file '{s}': {s}\n",
+            .{ config_path, @errorName(err) },
+        );
+        return err;
+    };
+    defer allocator.free(existing);
+
+    var file = std.fs.cwd().createFile(config_path, .{}) catch |err| {
+        try stderr.print(
+            "hikkoshi: failed to open config file '{s}' for writing: {s}\n",
+            .{ config_path, @errorName(err) },
+        );
+        return err;
+    };
+    defer file.close();
+
+    var file_buffer: [1024]u8 = undefined;
+    var file_writer = file.writer(&file_buffer);
+    const out = &file_writer.interface;
+    defer out.flush() catch {};
+
+    if (existing.len > 0) {
+        try out.writeAll(existing);
+        if (existing[existing.len - 1] != '\n') {
+            try out.writeAll("\n");
+        }
+        try out.writeAll("\n");
+    }
+
+    try out.print("[profiles.{s}]\n", .{profile_name});
+    try out.writeAll("home   = ");
+    try writeTomlSingleQuotedString(out, home_arg);
+    try out.writeAll("\n");
+
+    try stdout.print(
+        "hikkoshi: added profile '{s}' with home '{s}' to config '{s}'\n",
+        .{ profile_name, home_arg, config_path },
+    );
 }
 
 fn cmdConfigPath(allocator: std.mem.Allocator, override_config_path: ?[]const u8) !void {
@@ -426,11 +567,12 @@ fn cmdRunProfile(
 fn printUsage(writer: anytype) !void {
     try writer.writeAll(
         \\Usage:
-        \\  hikkoshi [--config <path>] <profile> <command> [args...]
-        \\  hikkoshi [--config <path>] list
-        \\  hikkoshi [--config <path>] show <profile>
-        \\  hikkoshi [--config <path>] config-path
-        \\  hikkoshi example
+        \\  hks [--config <path>] <profile> <command> [args...]
+        \\  hks [--config <path>] add <home> [name]
+        \\  hks [--config <path>] list
+        \\  hks [--config <path>] show <profile>
+        \\  hks [--config <path>] config-path
+        \\  hks example
         \\
         \\Options:
         \\  --config <path>   Use an explicit config file path instead of the default.
