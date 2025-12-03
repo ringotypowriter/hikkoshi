@@ -98,8 +98,9 @@ hks test python script.py
 Run an entire shell command line under a profile:
 
 ```bash
-hks work --sh 'codex auth login'
-hks alt  --sh 'codex run --app some-app'
+hks work --sh 'codex login'            # log into Codex under the "work" profile
+hks alt  --sh 'codex login'            # log into Codex under the "alt" profile
+hks work --sh 'codex'                  # open the interactive Codex CLI in "work"
 ```
 
 List profiles:
