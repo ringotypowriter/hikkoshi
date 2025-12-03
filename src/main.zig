@@ -1,6 +1,16 @@
 const std = @import("std");
 const hikko = @import("hikkoshi");
 
+var use_color_stdout: bool = false;
+var use_color_stderr: bool = false;
+
+const COLOR_RESET = "\x1b[0m";
+const COLOR_BOLD = "\x1b[1m";
+const COLOR_DIM = "\x1b[2m";
+const COLOR_CYAN = "\x1b[36m";
+const COLOR_GREEN = "\x1b[32m";
+const COLOR_YELLOW = "\x1b[33m";
+
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
@@ -11,6 +21,8 @@ pub fn main() !void {
 }
 
 fn run(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    initColorSupport(allocator);
+
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;
@@ -27,7 +39,7 @@ fn run(allocator: std.mem.Allocator, args: []const []const u8) !void {
     // Optional global flag: --config <path>
     if (idx < args.len and std.mem.eql(u8, args[idx], "--config")) {
         if (idx + 1 >= args.len) {
-            try stderr.writeAll("hikkoshi: --config requires a path argument\n");
+            try writeStatus(stderr, "--config requires a path argument\n");
             try printUsage(stderr);
             return;
         }
@@ -47,7 +59,7 @@ fn run(allocator: std.mem.Allocator, args: []const []const u8) !void {
         return;
     } else if (std.mem.eql(u8, cmd, "add")) {
         if (idx + 1 >= args.len) {
-            try stderr.writeAll("hikkoshi: add requires a home directory path\n");
+            try writeStatus(stderr, "add requires a home directory path\n");
             return;
         }
         const home_arg = args[idx + 1];
@@ -56,7 +68,7 @@ fn run(allocator: std.mem.Allocator, args: []const []const u8) !void {
         return;
     } else if (std.mem.eql(u8, cmd, "show")) {
         if (idx + 1 >= args.len) {
-            try stderr.writeAll("hikkoshi: show requires a profile name\n");
+            try writeStatus(stderr, "show requires a profile name\n");
             return;
         }
         const profile_name = args[idx + 1];
@@ -76,7 +88,7 @@ fn run(allocator: std.mem.Allocator, args: []const []const u8) !void {
     // Otherwise: treat as profile name.
     const profile_name = cmd;
     if (idx + 1 >= args.len) {
-        try stderr.writeAll("hikkoshi: missing command to run\n");
+        try writeStatus(stderr, "missing command to run\n");
         try printUsage(stderr);
         return;
     }
@@ -99,8 +111,9 @@ fn cmdList(allocator: std.mem.Allocator, override_config_path: ?[]const u8) !voi
     const config_path = hikko.resolveConfigPath(allocator, override_config_path) catch |err| {
         switch (err) {
             error.HomeNotSet => {
-                try stderr.writeAll(
-                    "hikkoshi: HOME is not set and no config path is specified\n",
+                try writeStatus(
+                    stderr,
+                    "HOME is not set and no config path is specified\n",
                 );
                 return;
             },
@@ -123,8 +136,14 @@ fn cmdList(allocator: std.mem.Allocator, override_config_path: ?[]const u8) !voi
         }
     }.lessThan);
 
-    for (names) |name| {
-        try stdout.print("{s}\n", .{name});
+    if (use_color_stdout) {
+        for (names) |name| {
+            try stdout.print("{s}{s}{s}\n", .{ COLOR_GREEN, name, COLOR_RESET });
+        }
+    } else {
+        for (names) |name| {
+            try stdout.print("{s}\n", .{name});
+        }
     }
 }
 
@@ -146,8 +165,9 @@ fn cmdShow(
     const config_path = hikko.resolveConfigPath(allocator, override_config_path) catch |err| {
         switch (err) {
             error.HomeNotSet => {
-                try stderr.writeAll(
-                    "hikkoshi: HOME is not set and no config path is specified\n",
+                try writeStatus(
+                    stderr,
+                    "HOME is not set and no config path is specified\n",
                 );
                 return;
             },
@@ -162,7 +182,7 @@ fn cmdShow(
     defer cfg.deinit();
 
     const profile = hikko.findProfile(&cfg, profile_name) orelse {
-        try stderr.print("hikkoshi: profile '{s}' not found\n", .{profile_name});
+        try printStatusf(stderr, "profile '{s}' not found\n", .{profile_name});
 
         const names = try hikko.collectProfileNames(&cfg, allocator);
         defer allocator.free(names);
@@ -188,18 +208,53 @@ fn cmdShow(
     const xdg_cache_home = env_map.get("XDG_CACHE_HOME") orelse "";
     const xdg_state_home = env_map.get("XDG_STATE_HOME") orelse "";
 
-    try stdout.print("profile: {s}\n", .{profile.name});
-    try stdout.print("  HOME            = {s}\n", .{home});
-    try stdout.print("  XDG_CONFIG_HOME = {s}\n", .{xdg_config_home});
-    try stdout.print("  XDG_DATA_HOME   = {s}\n", .{xdg_data_home});
-    try stdout.print("  XDG_CACHE_HOME  = {s}\n", .{xdg_cache_home});
-    try stdout.print("  XDG_STATE_HOME  = {s}\n", .{xdg_state_home});
+    if (use_color_stdout) {
+        try stdout.print(
+            "{s}profile{s}: {s}{s}{s}\n",
+            .{ COLOR_CYAN, COLOR_RESET, COLOR_GREEN, profile.name, COLOR_RESET },
+        );
+        try stdout.print("  {s}HOME{s}            = {s}\n", .{ COLOR_CYAN, COLOR_RESET, home });
+        try stdout.print(
+            "  {s}XDG_CONFIG_HOME{s} = {s}\n",
+            .{ COLOR_CYAN, COLOR_RESET, xdg_config_home },
+        );
+        try stdout.print(
+            "  {s}XDG_DATA_HOME{s}   = {s}\n",
+            .{ COLOR_CYAN, COLOR_RESET, xdg_data_home },
+        );
+        try stdout.print(
+            "  {s}XDG_CACHE_HOME{s}  = {s}\n",
+            .{ COLOR_CYAN, COLOR_RESET, xdg_cache_home },
+        );
+        try stdout.print(
+            "  {s}XDG_STATE_HOME{s}  = {s}\n",
+            .{ COLOR_CYAN, COLOR_RESET, xdg_state_home },
+        );
 
-    if (profile.env.count() > 0) {
-        try stdout.writeAll("  env:\n");
-        var it = profile.env.iterator();
-        while (it.next()) |entry| {
-            try stdout.print("    {s}={s}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+        if (profile.env.count() > 0) {
+            try stdout.print("  {s}env{s}:\n", .{ COLOR_CYAN, COLOR_RESET });
+            var it = profile.env.iterator();
+            while (it.next()) |entry| {
+                try stdout.print(
+                    "    {s}{s}{s}={s}\n",
+                    .{ COLOR_GREEN, entry.key_ptr.*, COLOR_RESET, entry.value_ptr.* },
+                );
+            }
+        }
+    } else {
+        try stdout.print("profile: {s}\n", .{profile.name});
+        try stdout.print("  HOME            = {s}\n", .{home});
+        try stdout.print("  XDG_CONFIG_HOME = {s}\n", .{xdg_config_home});
+        try stdout.print("  XDG_DATA_HOME   = {s}\n", .{xdg_data_home});
+        try stdout.print("  XDG_CACHE_HOME  = {s}\n", .{xdg_cache_home});
+        try stdout.print("  XDG_STATE_HOME  = {s}\n", .{xdg_state_home});
+
+        if (profile.env.count() > 0) {
+            try stdout.writeAll("  env:\n");
+            var it = profile.env.iterator();
+            while (it.next()) |entry| {
+                try stdout.print("    {s}={s}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+            }
         }
     }
 }
@@ -259,15 +314,16 @@ fn cmdAddProfile(
     defer stderr.flush() catch {};
 
     if (home_arg.len == 0) {
-        try stderr.writeAll("hikkoshi: add requires a non-empty home directory path\n");
+        try writeStatus(stderr, "add requires a non-empty home directory path\n");
         return;
     }
 
     const config_path = hikko.resolveConfigPath(allocator, override_config_path) catch |err| {
         switch (err) {
             error.HomeNotSet => {
-                try stderr.writeAll(
-                    "hikkoshi: HOME is not set and no config path is specified\n",
+                try writeStatus(
+                    stderr,
+                    "HOME is not set and no config path is specified\n",
                 );
                 return;
             },
@@ -283,20 +339,19 @@ fn cmdAddProfile(
 
     const profile_name = name_arg orelse deriveProfileNameFromHome(home_arg);
     if (profile_name.len == 0) {
-        try stderr.writeAll(
-            "hikkoshi: failed to derive profile name from home path\n",
-        );
+        try writeStatus(stderr, "failed to derive profile name from home path\n");
         return;
     }
 
     if (hikko.findProfile(&cfg, profile_name) != null) {
-        try stderr.print("hikkoshi: profile '{s}' already exists\n", .{profile_name});
+        try printStatusf(stderr, "profile '{s}' already exists\n", .{profile_name});
         return;
     }
 
     const existing = std.fs.cwd().readFileAlloc(allocator, config_path, std.math.maxInt(usize)) catch |err| {
-        try stderr.print(
-            "hikkoshi: failed to read config file '{s}': {s}\n",
+        try printStatusf(
+            stderr,
+            "failed to read config file '{s}': {s}\n",
             .{ config_path, @errorName(err) },
         );
         return err;
@@ -304,8 +359,9 @@ fn cmdAddProfile(
     defer allocator.free(existing);
 
     var file = std.fs.cwd().createFile(config_path, .{}) catch |err| {
-        try stderr.print(
-            "hikkoshi: failed to open config file '{s}' for writing: {s}\n",
+        try printStatusf(
+            stderr,
+            "failed to open config file '{s}' for writing: {s}\n",
             .{ config_path, @errorName(err) },
         );
         return err;
@@ -350,8 +406,9 @@ fn cmdConfigPath(allocator: std.mem.Allocator, override_config_path: ?[]const u8
     const config_path = hikko.resolveConfigPath(allocator, override_config_path) catch |err| {
         switch (err) {
             error.HomeNotSet => {
-                try stderr.writeAll(
-                    "hikkoshi: HOME is not set and no config path is specified\n",
+                try writeStatus(
+                    stderr,
+                    "HOME is not set and no config path is specified\n",
                 );
                 return;
             },
@@ -395,8 +452,9 @@ fn loadConfigOrPromptCreateFor(
 }
 
 fn maybeCreateExampleConfigAtPath(config_path: []const u8, stderr: anytype) !bool {
-    try stderr.print(
-        "hikkoshi: config file not found at '{s}'\n",
+    try printStatusf(
+        stderr,
+        "config file not found at '{s}'\n",
         .{config_path},
     );
     try stderr.writeAll(
@@ -428,22 +486,24 @@ fn maybeCreateExampleConfigAtPath(config_path: []const u8, stderr: anytype) !boo
 
     const ch = answer_buf[0];
     if (ch != 'y' and ch != 'Y') {
-        try stderr.writeAll("hikkoshi: not creating config file\n");
+        try writeStatus(stderr, "not creating config file\n");
         return false;
     }
 
     const dir_path = std.fs.path.dirname(config_path) orelse ".";
     std.fs.cwd().makePath(dir_path) catch |err| {
-        try stderr.print(
-            "hikkoshi: failed to create config directory '{s}': {s}\n",
+        try printStatusf(
+            stderr,
+            "failed to create config directory '{s}': {s}\n",
             .{ dir_path, @errorName(err) },
         );
         return false;
     };
 
     var file = std.fs.cwd().createFile(config_path, .{}) catch |err| {
-        try stderr.print(
-            "hikkoshi: failed to create config file '{s}': {s}\n",
+        try printStatusf(
+            stderr,
+            "failed to create config file '{s}': {s}\n",
             .{ config_path, @errorName(err) },
         );
         return false;
@@ -457,10 +517,7 @@ fn maybeCreateExampleConfigAtPath(config_path: []const u8, stderr: anytype) !boo
 
     try hikko.printExampleConfig(out);
 
-    try stderr.print(
-        "hikkoshi: wrote example config to '{s}'\n",
-        .{config_path},
-    );
+    try printStatusf(stderr, "wrote example config to '{s}'\n", .{config_path});
 
     return true;
 }
@@ -477,20 +534,21 @@ fn cmdRunProfile(
     defer stderr.flush() catch {};
 
     if (child_argv.len == 0) {
-        try stderr.writeAll("hikkoshi: missing command to run\n");
+        try writeStatus(stderr, "missing command to run\n");
         return;
     }
 
     if (std.mem.eql(u8, child_argv[0], "--sh") and child_argv.len < 2) {
-        try stderr.writeAll("hikkoshi: --sh requires a command string\n");
+        try writeStatus(stderr, "--sh requires a command string\n");
         return;
     }
 
     const config_path = hikko.resolveConfigPath(allocator, override_config_path) catch |err| {
         switch (err) {
             error.HomeNotSet => {
-                try stderr.writeAll(
-                    "hikkoshi: HOME is not set and no config path is specified\n",
+                try writeStatus(
+                    stderr,
+                    "HOME is not set and no config path is specified\n",
                 );
                 return;
             },
@@ -505,7 +563,7 @@ fn cmdRunProfile(
     defer cfg.deinit();
 
     const profile = hikko.findProfile(&cfg, profile_name) orelse {
-        try stderr.print("hikkoshi: profile '{s}' not found\n", .{profile_name});
+        try printStatusf(stderr, "profile '{s}' not found\n", .{profile_name});
         return;
     };
 
@@ -533,20 +591,23 @@ fn cmdRunProfile(
         const cmd = argv_for_child[0];
         switch (err) {
             error.FileNotFound => {
-                try stderr.print(
-                    "hikkoshi: failed to spawn '{s}': command not found\n",
+                try printStatusf(
+                    stderr,
+                    "failed to spawn '{s}': command not found\n",
                     .{cmd},
                 );
             },
             error.AccessDenied => {
-                try stderr.print(
-                    "hikkoshi: failed to spawn '{s}': access denied\n",
+                try printStatusf(
+                    stderr,
+                    "failed to spawn '{s}': access denied\n",
                     .{cmd},
                 );
             },
             else => {
-                try stderr.print(
-                    "hikkoshi: failed to spawn '{s}': {s}\n",
+                try printStatusf(
+                    stderr,
+                    "failed to spawn '{s}': {s}\n",
                     .{ cmd, @errorName(err) },
                 );
             },
@@ -564,33 +625,117 @@ fn cmdRunProfile(
     }
 }
 
+fn initColorSupport(allocator: std.mem.Allocator) void {
+    var no_color_set = false;
+    if (std.process.getEnvVarOwned(allocator, "NO_COLOR")) |value| {
+        no_color_set = value.len != 0;
+        allocator.free(value);
+    } else |_| {}
+
+    if (no_color_set) {
+        use_color_stdout = false;
+        use_color_stderr = false;
+        return;
+    }
+
+    use_color_stdout = std.fs.File.stdout().isTty();
+    use_color_stderr = std.fs.File.stderr().isTty();
+}
+
+fn writeStatus(writer: anytype, msg: []const u8) !void {
+    if (use_color_stderr) {
+        try writer.writeAll(COLOR_CYAN);
+        try writer.writeAll("hikkoshi");
+        try writer.writeAll(COLOR_RESET);
+        try writer.writeAll(": ");
+        try writer.writeAll(msg);
+    } else {
+        try writer.writeAll("hikkoshi: ");
+        try writer.writeAll(msg);
+    }
+}
+
+fn printStatusf(writer: anytype, comptime fmt: []const u8, args: anytype) !void {
+    if (use_color_stderr) {
+        try writer.writeAll(COLOR_CYAN);
+        try writer.writeAll("hikkoshi");
+        try writer.writeAll(COLOR_RESET);
+        try writer.writeAll(": ");
+        try writer.print(fmt, args);
+    } else {
+        const full = comptime "hikkoshi: " ++ fmt;
+        try writer.print(full, args);
+    }
+}
+
 fn printUsage(writer: anytype) !void {
-    try writer.writeAll(
-        \\Usage:
-        \\  hks [--config <path>] <profile> <command> [args...]
-        \\  hks [--config <path>] add <home> [name]
-        \\  hks [--config <path>] list
-        \\  hks [--config <path>] show <profile>
-        \\  hks [--config <path>] config-path
-        \\  hks example
-        \\
-        \\Options:
-        \\  --config <path>   Use an explicit config file path instead of the default.
-        \\
-        \\Configuration:
-        \\  Default config path is: $HOME/.config/hikkoshi/config.toml
-        \\  Or override via the HIKKOSHI_CONFIG environment variable.
-        \\
-        \\TOML schema (per profile):
-        \\  [profiles.<name>]
-        \\  home   = \"~/profiles/<name>\"
-        \\  # config = \"~/profiles/<name>/.config\"
-        \\  # data   = \"~/profiles/<name>/.local/share\"
-        \\  # cache  = \"~/profiles/<name>/.cache\"
-        \\  # state  = \"~/profiles/<name>/.local/state\"
-        \\
-        \\  [profiles.<name>.env]
-        \\  KEY = \"VALUE\"
-        \\
+    const use_color = use_color_stderr;
+    const reset = if (use_color) COLOR_RESET else "";
+    const bold = if (use_color) COLOR_BOLD else "";
+    const dim = if (use_color) COLOR_DIM else "";
+    const cyan = if (use_color) COLOR_CYAN else "";
+    const accent = if (use_color) COLOR_YELLOW else "";
+
+    try writer.print(
+        "{s}{s}Hikkoshi{s}\n",
+        .{ bold, cyan, reset },
     );
+
+    try writer.print("{s}Usage{s}\n", .{ bold, reset });
+    try writer.writeAll(
+        "  hks [--config <path>] <profile> <command> [args...]\n",
+    );
+    try writer.writeAll("  hks [--config <path>] add <home> [name]\n");
+    try writer.writeAll("  hks [--config <path>] list\n");
+    try writer.writeAll("  hks [--config <path>] show <profile>\n");
+    try writer.writeAll("  hks [--config <path>] config-path\n");
+    try writer.writeAll("  hks example\n\n");
+
+    try writer.print("{s}Subcommands{s}\n", .{ bold, reset });
+    try writer.print(
+        "  {s}list{s}          List available profiles\n",
+        .{ accent, reset },
+    );
+    try writer.print(
+        "  {s}add{s}           Append a new profile to the config\n",
+        .{ accent, reset },
+    );
+    try writer.print(
+        "  {s}show{s}          Show resolved paths and env for a profile\n",
+        .{ accent, reset },
+    );
+    try writer.print(
+        "  {s}config-path{s}   Print the config file in use\n",
+        .{ accent, reset },
+    );
+    try writer.print(
+        "  {s}example{s}       Print an example config to stdout\n\n",
+        .{ accent, reset },
+    );
+
+    try writer.print("{s}Options{s}\n", .{ bold, reset });
+    try writer.print(
+        "  {s}--config{s} <path>   Use an explicit config file path instead of the default.\n\n",
+        .{ accent, reset },
+    );
+
+    try writer.print("{s}Configuration{s}\n", .{ bold, reset });
+    try writer.print(
+        "  {s}Default config path{s}: $HOME/.config/hikkoshi/config.toml\n",
+        .{ dim, reset },
+    );
+    try writer.print(
+        "  {s}Override via{s}: HIKKOSHI_CONFIG environment variable\n\n",
+        .{ dim, reset },
+    );
+
+    try writer.print("{s}TOML schema (per profile){s}\n", .{ bold, reset });
+    try writer.writeAll("  [profiles.<name>]\n");
+    try writer.writeAll("  home   = \"~/profiles/<name>\"\n");
+    try writer.writeAll("  # config = \"~/profiles/<name>/.config\"\n");
+    try writer.writeAll("  # data   = \"~/profiles/<name>/.local/share\"\n");
+    try writer.writeAll("  # cache  = \"~/profiles/<name>/.cache\"\n");
+    try writer.writeAll("  # state  = \"~/profiles/<name>/.local/state\"\n\n");
+    try writer.writeAll("  [profiles.<name>.env]\n");
+    try writer.writeAll("  KEY = \"VALUE\"\n");
 }

@@ -23,7 +23,7 @@ pub fn buildEnvMapForProfile(
         allocator,
         profile.config,
         home,
-        &.{ ".config" },
+        &.{".config"},
         parent_home_opt,
     );
     try env_map.put("XDG_CONFIG_HOME", xdg_config_home);
@@ -41,7 +41,7 @@ pub fn buildEnvMapForProfile(
         allocator,
         profile.cache,
         home,
-        &.{ ".cache" },
+        &.{".cache"},
         parent_home_opt,
     );
     try env_map.put("XDG_CACHE_HOME", xdg_cache_home);
