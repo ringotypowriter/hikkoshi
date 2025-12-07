@@ -1,0 +1,332 @@
+name: Build Multi-Platform Binaries
+
+# Build hikkoshi for common open-source CLI platforms.
+# - Linux + Windows built on ubuntu via Zig cross-compilation
+# - macOS built on macOS runner
+# Optional release:
+# - workflow_dispatch: set release=true
+# - push tags: auto release
+# Tag:
+# - push tags uses the pushed tag
+# - workflow_dispatch auto-generates from build.zig.zon (.version) with "v" prefix,
+#   unless inputs.tag is provided.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Create release with binaries"
+        required: false
+        type: boolean
+        default: false
+      tag:
+        description: "Release tag (auto-generated from build.zig.zon if empty)"
+        required: false
+        type: string
+        default: ""
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ------------------------
+          # Linux (musl = portable static-ish CLI style)
+          # ------------------------
+          - target: linux-x86_64
+            os: ubuntu-latest
+            zig_target: x86_64-linux-musl
+            artifact_base: hikkoshi-linux-x86_64
+            package_ext: tar.gz
+
+          - target: linux-aarch64
+            os: ubuntu-latest
+            zig_target: aarch64-linux-musl
+            artifact_base: hikkoshi-linux-aarch64
+            package_ext: tar.gz
+
+          # 32-bit x86 (Zig uses "x86" naming)
+          - target: linux-x86
+            os: ubuntu-latest
+            zig_target: x86-linux-musl
+            artifact_base: hikkoshi-linux-x86
+            package_ext: tar.gz
+
+          # ------------------------
+          # Windows (cross-compile on ubuntu)
+          # ------------------------
+          - target: windows-x86_64
+            os: ubuntu-latest
+            zig_target: x86_64-windows-gnu
+            artifact_base: hikkoshi-windows-x86_64
+            package_ext: zip
+
+          - target: windows-aarch64
+            os: ubuntu-latest
+            zig_target: aarch64-windows-gnu
+            artifact_base: hikkoshi-windows-aarch64
+            package_ext: zip
+
+          # ------------------------
+          # macOS (build on macOS runner)
+          # ------------------------
+          - target: macos-x86_64
+            os: macos-latest
+            zig_target: x86_64-macos
+            artifact_base: hikkoshi-macos-x86_64
+            package_ext: tar.gz
+
+          - target: macos-aarch64
+            os: macos-latest
+            zig_target: aarch64-macos
+            artifact_base: hikkoshi-macos-aarch64
+            package_ext: tar.gz
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.15.2
+
+      - name: Build binary
+        run: |
+          zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseFast
+
+          mkdir -p out
+          BIN="hikkoshi"
+          if [[ "${{ matrix.zig_target }}" == *windows* ]]; then
+            BIN="hikkoshi.exe"
+          fi
+
+          cp "zig-out/bin/${BIN}" "out/${BIN}"
+          chmod +x "out/${BIN}" || true
+
+          echo "Built binary:"
+          ls -la out
+          file "out/${BIN}" || true
+
+      - name: Package
+        run: |
+          mkdir -p dist
+
+          BIN="hikkoshi"
+          if [[ "${{ matrix.zig_target }}" == *windows* ]]; then
+            BIN="hikkoshi.exe"
+          fi
+
+          PKG="${{ matrix.artifact_base }}.${{ matrix.package_ext }}"
+
+          if [[ "${{ matrix.package_ext }}" == "zip" ]]; then
+            # -j: junk paths
+            zip -j "dist/${PKG}" "out/${BIN}"
+          else
+            # tar.gz
+            tar -czf "dist/${PKG}" -C out "${BIN}"
+          fi
+
+          echo "Packaged:"
+          ls -la dist
+          file "dist/${PKG}" || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_base }}
+          path: dist/${{ matrix.artifact_base }}.${{ matrix.package_ext }}
+          retention-days: 14
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true') ||
+      (github.event_name == 'push')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display structure of downloaded files
+        run: ls -R artifacts
+
+      - name: Resolve tag and version
+        id: meta
+        run: |
+          VERSION=""
+          TAG=""
+
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            # Extract version from build.zig.zon
+            VERSION=$(grep -E '^\s*\.version\s*=' build.zig.zon | sed -E 's/.*"([^"]+)".*/\1/')
+            if [ -z "$VERSION" ]; then
+              echo "Error: Could not extract version from build.zig.zon"
+              exit 1
+            fi
+
+            if [ -z "${{ github.event.inputs.tag }}" ]; then
+              TAG="v$VERSION"
+            else
+              TAG="${{ github.event.inputs.tag }}"
+            fi
+          fi
+
+          # Basic tag sanity check (allow prerelease like v1.2.3-alpha.1)
+          if ! [[ "$TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([\-\.][0-9A-Za-z\.-]+)?$ ]]; then
+            echo "Error: Invalid tag format '$TAG'"
+            exit 1
+          fi
+
+          # If push event didn't set VERSION, try to derive it from tag
+          if [ -z "$VERSION" ]; then
+            VERSION="${TAG#v}"
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          echo "Using tag: $TAG"
+          echo "Version: $VERSION"
+
+      - name: Create and push tag (workflow_dispatch only)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+
+          git fetch --tags
+
+          if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+            echo "Tag $TAG already exists on remote"
+          else
+            echo "Creating new tag: $TAG"
+            git config --local user.email "action@github.com"
+            git config --local user.name "GitHub Action"
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG"
+          fi
+
+      - name: Collect release assets
+        run: |
+          mkdir -p release_assets
+          # Each artifact is downloaded into artifacts/<name>/<file>
+          find artifacts -type f -maxdepth 3 -print -exec cp {} release_assets/ \;
+
+          echo "Release assets:"
+          ls -la release_assets
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd release_assets
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Write release notes
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          VERSION="${{ steps.meta.outputs.version }}"
+
+          cat > release-notes.md <<EOF
+          Automated release for hikkoshi ${TAG}
+
+          ## Version Information
+          - Package version: ${VERSION}
+          - Release tag: ${TAG}
+
+          ## Binaries
+          This release includes pre-built packages for:
+          - Linux x86_64 (musl)
+          - Linux ARM64 (musl)
+          - Linux x86 32-bit (musl)
+          - Windows x86_64 (GNU)
+          - Windows ARM64 (GNU)
+          - macOS x86_64
+          - macOS ARM64
+
+          ## Installation
+
+          ### Linux / macOS
+          \`\`\`bash
+          tar -xzf hikkoshi-*.tar.gz
+          chmod +x hikkoshi
+          sudo mv hikkoshi /usr/local/bin/hikkoshi
+          \`\`\`
+
+          ### Windows (PowerShell)
+          1. Extract the `.zip` file
+          2. Place `hikkoshi.exe` in a directory in your PATH
+
+          ## Usage
+          \`\`\`bash
+          hikkoshi --help
+          \`\`\`
+
+          ## Checksums
+          See \`SHA256SUMS.txt\`.
+          EOF
+
+      - name: Create GitHub Release with GH CLI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+
+          PRERELEASE_FLAG=""
+          if [[ "$TAG" == *"-"* ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          # If release exists, upload assets; otherwise create
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, uploading assets..."
+            gh release upload "$TAG" release_assets/* --clobber
+          else
+            gh release create "$TAG" \
+              --title "Release $TAG" \
+              --notes-file release-notes.md \
+              $PRERELEASE_FLAG \
+              release_assets/*
+          fi
+
+  cleanup:
+    name: Cleanup
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Delete artifacts
+        uses: geekyeggo/delete-artifact@v2
+        with:
+          name: |
+            hikkoshi-linux-x86_64
+            hikkoshi-linux-aarch64
+            hikkoshi-linux-x86
+            hikkoshi-windows-x86_64
+            hikkoshi-windows-aarch64
+            hikkoshi-macos-x86_64
+            hikkoshi-macos-aarch64
+          failOnError: false
