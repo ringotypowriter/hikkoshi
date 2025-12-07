@@ -110,9 +110,9 @@ jobs:
           zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseFast
 
           mkdir -p out
-          BIN="hikkoshi"
+          BIN="hks"
           if [[ "${{ matrix.zig_target }}" == *windows* ]]; then
-            BIN="hikkoshi.exe"
+            BIN="hks.exe"
           fi
 
           cp "zig-out/bin/${BIN}" "out/${BIN}"
@@ -126,9 +126,9 @@ jobs:
         run: |
           mkdir -p dist
 
-          BIN="hikkoshi"
+          BIN="hks"
           if [[ "${{ matrix.zig_target }}" == *windows* ]]; then
-            BIN="hikkoshi.exe"
+            BIN="hks.exe"
           fi
 
           PKG="${{ matrix.artifact_base }}.${{ matrix.package_ext }}"
@@ -273,17 +273,17 @@ jobs:
           ### Linux / macOS
           \`\`\`bash
           tar -xzf hikkoshi-*.tar.gz
-          chmod +x hikkoshi
-          sudo mv hikkoshi /usr/local/bin/hikkoshi
+          chmod +x hks
+          sudo mv hks /usr/local/bin/hks
           \`\`\`
 
           ### Windows (PowerShell)
           1. Extract the `.zip` file
-          2. Place `hikkoshi.exe` in a directory in your PATH
+          2. Place `hks.exe` in a directory in your PATH
 
           ## Usage
           \`\`\`bash
-          hikkoshi --help
+          hks --help
           \`\`\`
 
           ## Checksums
