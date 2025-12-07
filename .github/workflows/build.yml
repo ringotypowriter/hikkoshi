@@ -150,7 +150,7 @@ jobs:
         with:
           name: ${{ matrix.artifact_base }}
           path: dist/${{ matrix.artifact_base }}.${{ matrix.package_ext }}
-          retention-days: 14
+          retention-days: 3
 
   release:
     name: Create Release
@@ -312,22 +312,3 @@ jobs:
               $PRERELEASE_FLAG \
               release_assets/*
           fi
-
-  cleanup:
-    name: Cleanup
-    needs: build
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - name: Delete artifacts
-        uses: geekyeggo/delete-artifact@v2
-        with:
-          name: |
-            hikkoshi-linux-x86_64
-            hikkoshi-linux-aarch64
-            hikkoshi-linux-x86
-            hikkoshi-windows-x86_64
-            hikkoshi-windows-aarch64
-            hikkoshi-macos-x86_64
-            hikkoshi-macos-aarch64
-          failOnError: false
